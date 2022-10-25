@@ -34,20 +34,28 @@ MESSAGE_UNSENT = 'Сбой при отправке сообщения: "{message
 CONNECTION_ERROR = (
     'Ошибка при запросе к API: '
     'Текст ошибки: {error}, '
-    'url = {endpoint}, '
+    'url = {url}, '
     'headers = {headers}, '
     'параметры = {params}, '
 )
-SERVER_REJECT = 'Отказ сервера: {error}'
-WRONG_STATUS_CODE = 'Код доступа отличен от 200, код: {status_code}'
+SERVER_REJECT = (
+    'Отказ сервера: {error}, '
+    'ключ ошибки: {key}, '
+    'url = {url}, '
+    'headers = {headers}, '
+    'параметры = {params}, '
+)
+WRONG_STATUS_CODE = (
+    'Код доступа отличен от 200, код: {status_code}, '
+    'url = {url}, '
+    'headers = {headers}, '
+    'параметры = {params}, '
+)
 RESPONSE_TYPE_ERROR = 'В ответе сервера не словарь, а {type}'
 RESPONSE_KEY_ERROR = 'Не найден ключ homework'
 HOMEWORK_KEY_ERROR = 'Под ключом homework не список, а {type}'
 UNKNOWN_STATUS = 'Неизвестный статус: {status}'
-TOKEN_MISSING = (
-    'Отсутствует обязательная переменная окружения: {tokens}. '
-    'Задача остановлена.'
-)
+TOKEN_MISSING = ('Отсутствует обязательная переменная окружения: {tokens}')
 STATUS_UNCHANGED = 'Статус работы не изменился'
 FAILURE = 'Сбой в работе программы: {error}'
 
@@ -71,26 +79,28 @@ def get_api_answer(current_timestamp):
     из JSON в типы данных python
     """
     params = {'from_date': current_timestamp}
+    request_fields = dict(url=ENDPOINT, headers=HEADERS, params=params)
     try:
-        response = requests.get(ENDPOINT, headers=HEADERS, params=params)
+        response = requests.get(**request_fields)
     except requests.exceptions.RequestException as error:
         raise ConnectionError(
-            CONNECTION_ERROR.format(
-                error=error,
-                endpoint=ENDPOINT,
-                headers=HEADERS,
-                params=params
-            )
+            CONNECTION_ERROR.format(error=error, **request_fields)
         )
-    resp = response.json()
+    reply = response.json()
     for error in API_ERROR_KEYS:
-        if error in resp:
-            raise ServerReject(SERVER_REJECT.format(error=resp[error]))
+        if error in reply:
+            raise ServerReject(
+                SERVER_REJECT.format(
+                    error=reply[error], key=error, **request_fields
+                )
+            )
     if response.status_code != HTTPStatus.OK:
         raise StatusNotOk(
-            WRONG_STATUS_CODE.format(status_code=response.status_code)
+            WRONG_STATUS_CODE.format(
+                status_code=response.status_code, **request_fields
+            )
         )
-    return response.json()
+    return reply
 
 
 def check_response(response):
@@ -102,10 +112,10 @@ def check_response(response):
         raise TypeError(RESPONSE_TYPE_ERROR.format(type=type(response)))
     if 'homeworks' not in response:
         raise KeyError(RESPONSE_KEY_ERROR)
-    homework = response['homeworks']
-    if not isinstance(homework, list):
-        raise TypeError(HOMEWORK_KEY_ERROR.format(type=type(homework)))
-    return homework
+    homeworks = response['homeworks']
+    if not isinstance(homeworks, list):
+        raise TypeError(HOMEWORK_KEY_ERROR.format(type=type(homeworks)))
+    return homeworks
 
 
 def parse_status(homework):
@@ -127,14 +137,12 @@ def check_tokens():
     Если отсутствует хотя бы одна переменная окружения — функция
     в False, иначе — True.
     """
-    tokens = ''
-    for name in TOKENS:
-        if globals()[name] is None:
-            tokens += f'{name}, '
+    bool = True
+    tokens = [name for name in TOKENS if globals()[name] is None]
     if tokens:
         logging.critical(TOKEN_MISSING.format(tokens=tokens))
-        return False
-    return True
+        bool = False
+    return bool
 
 
 def main():
@@ -148,25 +156,26 @@ def main():
     current_timestamp = int(time.time())
     old_message = ''
     error_message = ''
-    while check_tokens():
-        bot = telegram.Bot(token=TELEGRAM_TOKEN)
+    check_tokens()
+    bot = telegram.Bot(token=TELEGRAM_TOKEN)
+    while True:
         try:
             response = get_api_answer(current_timestamp)
-            homework = check_response(response)
-            message = parse_status(homework)
-            if old_message != message:
-                if send_message(bot, message):
-                    old_message = message
-                    current_timestamp = response.json()['current_date']
+            homeworks = check_response(response)
+            message = parse_status(homeworks)
+            if old_message != message and send_message(bot, message):
+                old_message = message
+                current_timestamp = response.get(
+                    'current_date', current_timestamp
+                )
             else:
                 logging.info(STATUS_UNCHANGED)
 
         except Exception as error:
             logging.error(FAILURE.format(error=error))
             message = FAILURE.format(error=error)
-            if error_message != message:
-                if send_message(bot, message):
-                    error_message = message
+            if error_message != message and send_message(bot, message):
+                error_message = message
         time.sleep(RETRY_TIME)
 
 
@@ -178,5 +187,4 @@ if __name__ == '__main__':
             logging.FileHandler(filename=__file__ + '.log', mode='a'),
             logging.StreamHandler(sys.stdout))
     )
-    logger = logging.getLogger(__name__)
     main()
