@@ -55,7 +55,9 @@ RESPONSE_TYPE_ERROR = 'В ответе сервера не словарь, а {t
 RESPONSE_KEY_ERROR = 'Не найден ключ homework'
 HOMEWORK_KEY_ERROR = 'Под ключом homework не список, а {type}'
 UNKNOWN_STATUS = 'Неизвестный статус: {status}'
-TOKEN_MISSING = ('Отсутствует обязательная переменная окружения: {tokens}')
+TOKEN_MISSING = (
+    'Отсутствует(-ют) обязательная(-ые) переменная(-ые) окружения: {tokens}'
+)
 STATUS_UNCHANGED = 'Статус работы не изменился'
 FAILURE = 'Сбой в работе программы: {error}'
 
@@ -78,8 +80,11 @@ def get_api_answer(current_timestamp):
     В случае успеха преобразует полученные данные
     из JSON в типы данных python
     """
-    params = {'from_date': current_timestamp}
-    request_fields = dict(url=ENDPOINT, headers=HEADERS, params=params)
+    request_fields = dict(
+        url=ENDPOINT,
+        headers=HEADERS,
+        params={'from_date': current_timestamp}
+    )
     try:
         response = requests.get(**request_fields)
     except requests.exceptions.RequestException as error:
@@ -137,12 +142,10 @@ def check_tokens():
     Если отсутствует хотя бы одна переменная окружения — функция
     в False, иначе — True.
     """
-    bool = True
     tokens = [name for name in TOKENS if globals()[name] is None]
     if tokens:
         logging.critical(TOKEN_MISSING.format(tokens=tokens))
-        bool = False
-    return bool
+    return not tokens
 
 
 def main():
@@ -153,10 +156,11 @@ def main():
     Получает статус работы и отправляет сообщение в Telegram.
     Цикл повторяется спустя заданное время
     """
+    if not check_tokens():
+        raise ValueError
     current_timestamp = int(time.time())
     old_message = ''
     error_message = ''
-    check_tokens()
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     while True:
         try:
